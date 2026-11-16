@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# This workflow needs ZERO secrets. Every backend test mocks all external
+# calls (Groq, Gemini, Nominatim, Open-Meteo, OSRM, DDG, Openverse, FX) or
+# runs against a disposable local Postgres (pgserver) instead of a real
+# Supabase project -- see backend/tests/conftest.py and backend/tests/db/.
+# The frontend build and tests never read VITE_SUPABASE_* at build or test
+# time either (frontend/src/pages/TripResult.test.tsx mocks services/api
+# directly). Do not add GROQ_API_KEY/DATABASE_URL/VITE_SUPABASE_*/etc.
+# secrets here; if a future test genuinely needs one, prefer a dummy
+# placeholder value committed to the workflow over a real key in Secrets.
+
+jobs:
+  backend-lint:
+    name: Backend lint (ruff)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - run: ruff check app tests
+
+  # Type-checking: mypy was evaluated and is intentionally NOT run in CI yet.
+  # `mypy app --ignore-missing-imports` currently reports 39 pre-existing
+  # errors across 10 files, driven by two things unrelated to adding CI:
+  #   1. TravelState (a loose TypedDict) is passed into helper functions
+  #      typed as dict[Any, Any] throughout app/agents/*, and
+  #   2. incomplete/incompatible third-party type stubs for langchain-groq
+  #      (ChatGroq's api_key param), psycopg_pool's AsyncConnectionPool
+  #      kwargs, and langgraph-checkpoint-postgres.
+  # Turning this into a CI gate needs a broader typing pass across the agent
+  # pipeline, which is out of scope for introducing CI. Revisit once that
+  # pass happens -- `pip install mypy && mypy app --ignore-missing-imports`
+  # from backend/ reproduces the current error list locally.
+
+  backend-test:
+    name: Backend tests (pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - run: pytest --cov=app --cov-report=term-missing
+
+  frontend-build:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      - run: npm run build
+
+  frontend-test:
+    name: Frontend tests (vitest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      - run: npm test
